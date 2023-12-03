@@ -1,0 +1,301 @@
+---
+title: "Drugs_Sentiment_Analysis"
+output: html_notebook
+---
+
+
+
+```{r}
+library(tinytex)
+library(ISLR2)
+library(ggplot2)
+library(dplyr)
+library(gridExtra)
+library(moments)
+library(reshape2)
+library(car)
+library(stringr)
+library(sentimentr)
+library(MASS)
+library(caret)
+library(corrplot)
+library(usethis) 
+library(ROCR)
+library(tm)
+library(textstem)
+library(pROC)
+library(SnowballC)
+library(wordcloud2)
+library(tidyverse)
+library(e1071) 
+library(tokenizers)
+library(tidytext)
+library(caTools)
+library(syuzhet)
+library(lubridate)
+library(scales)
+library(naivebayes)
+library(Matrix)
+```
+
+```{r}
+cat("Data Cleaning")
+print(paste("Loading Dataset"))
+druglibtest.url <- "/Users/somanshugupta/Desktop/CSP Project/Dataset/drugLibTest_raw.tsv"
+druglibtrain.url <- "/Users/somanshugupta/Desktop/CSP Project/Dataset/drugLibTrain_raw.tsv"
+druglibtest <- read.csv(druglibtest.url, header = TRUE, sep = '\t')
+druglibtrain <- read.csv(druglibtrain.url, header = TRUE, sep = '\t')
+
+
+##Dataset Lib Info
+head(druglibtest)
+head(druglibtrain)
+
+##Lib DataSet Summary
+summary(druglibtrain) 
+
+
+##Renaming Columns urldrugname to drugname
+names(druglibtest)[names(druglibtest) == "urlDrugName"] <- "drugName"
+names(druglibtrain)[names(druglibtrain) == "urlDrugName"] <- "drugName"
+
+##check ColNames
+colnames(druglibtest)
+colnames(druglibtrain)
+
+
+##Merging Review Column , As this is Our Target Variable & Dropping Other Review Columns
+druglibtrain_copy <- druglibtrain
+druglibtest_copy <- druglibtest
+droplibcolumns <- c("X", "benefitsReview","sideEffectsReview", "commentsReview","sideEffects", "effectiveness") 
+
+
+##Dropping Columns
+druglibtrain_copy = druglibtrain_copy[,!(names(druglibtrain_copy) %in% droplibcolumns)] 
+druglibtest_copy = druglibtest_copy[,!(names(druglibtest_copy) %in% droplibcolumns)] 
+ 
+
+druglibtrain_copy$review <- paste(druglibtrain$benefitsReview, druglibtrain$sideEffectsReview, druglibtrain$commentsReview)
+
+druglibtest_copy$review <- paste(druglibtest$benefitsReview, druglibtest$sideEffectsReview, druglibtest$commentsReview)
+
+##Check Review Text
+head(druglibtrain_copy$review,2)
+head(druglibtest_copy$review,2)
+
+
+##Concating lib and drug data set 
+drugstestdata <- druglibtest_copy
+drugstraindata <- druglibtrain_copy
+
+str(drugstestdata)
+str(drugstraindata)
+
+##Check Null Values, Blank Values 
+names(which(colSums(is.na(drugstraindata))>0))
+names(which(colSums(is.na(drugstestdata))>0))
+
+colSums(is.na(drugstraindata))
+colSums(is.na(drugstestdata))
+
+##Replacing NA values With 0
+drugstraindata <- replace(drugstraindata, is.na(drugstraindata), 0)
+drugstestdata <- replace(drugstestdata, is.na(drugstestdata), 0)
+
+##Check Null Values, Blank Values After Removing
+colSums(is.na(drugstraindata))
+colSums(is.na(drugstestdata))
+
+##Merge Train & Test Data
+TotalDrugsData = rbind(drugstraindata, drugstestdata)
+
+colnames(TotalDrugsData)
+
+
+##Fixing Data 
+TotalDrugsDataEdited <- TotalDrugsData 
+
+error_span <- str_detect(TotalDrugsDataEdited$condition, pattern = "</span>") #Identify erroneous entries
+TotalDrugsDataEdited$condition <- replace(TotalDrugsDataEdited$condition, list = error_span, NA) #Replace with NA
+
+#create character vector
+TotalDrugsDataEdited$condition <- as.factor(TotalDrugsDataEdited$condition)
+TotalDrugsDataEdited$drugName<- as.factor(TotalDrugsDataEdited$drugName)
+TotalDrugsDataEdited$review <- as.factor(TotalDrugsDataEdited$review )
+
+
+##Data Visulization
+ratingsreviewcolumns <- c("rating", "review")
+RatingVisulization <- TotalDrugsDataEdited[ratingsreviewcolumns]
+
+# # Count Different Ratings
+TotalDrugsDataEdited %>%
+  group_by(rating) %>%
+  count() %>%
+  mutate(pct_reviews = round((100*n/nrow(TotalDrugsDataEdited)),1)) %>%
+  arrange(desc(n))
+
+ggplot(RatingVisulization) +
+  geom_bar(aes(x = rating), fill = 'lightgreen')+
+  labs(x = "Rating (out of 10)", y = "Number of Reviews", title = "Rating Count V/S No Of Reviews")
+
+# Top 20 Drugs With 10/10 Rating
+drugnameratingcolumns <- c("drugName", "rating")
+drugnameratingvisualization <- TotalDrugsDataEdited[drugnameratingcolumns]
+drugnameratingvisualization <- drugnameratingvisualization[which(drugnameratingvisualization$rating==10),]
+drugnameratingvisualization <- drugnameratingvisualization[0:20,]
+
+ggplot(drugnameratingvisualization) +
+  geom_bar(aes(x = drugName), fill = 'lightgreen')+
+  labs(x = "Drug Names", y = "Number of Ratings", title = "Top 20 Drugs With 10/10 Rating")+
+  scale_x_discrete(guide = guide_axis(n.dodge=2))
+
+## Distribution Of Rating
+
+hist(TotalDrugsDataEdited$rating,
+     col="lightgreen",
+     prob = TRUE,
+     xlab = "Rating",
+     main = "Distribution Of Rating")
+
+lines(density(TotalDrugsDataEdited$rating),
+      lwd = 2,
+      col = "#009E73")
+
+conditions <- list(
+    (TotalDrugsDataEdited['rating']<=4),
+    (TotalDrugsDataEdited['rating']<8) & (TotalDrugsDataEdited['rating']>4),
+    (TotalDrugsDataEdited['rating']<=10)& (TotalDrugsDataEdited['rating']>7))
+
+choices = c('negative','neutral','positive')
+
+
+TotalDrugsDataEdited<-TotalDrugsDataEdited %>% mutate(sentimentlabel =
+                     case_when(rating <= 4 ~ "negative", 
+                               rating < 8 & rating>4 ~ "neutral",
+                               rating <= 10 & rating > 7 ~ "positive")
+)
+
+TotalDrugsDataEdited$sentimentlabel <- as.factor(TotalDrugsDataEdited$sentimentlabel )
+
+ratingslabelcolumns <- c("rating", "sentimentlabel")
+ratinglabelvisualization <- TotalDrugsDataEdited[ratingslabelcolumns]
+
+ggplot(TotalDrugsDataEdited, aes(x = "", y = rating, fill = sentimentlabel)) +
+  geom_col() +
+  coord_polar(theta = "y")
+
+# # Text Preprocessing Tokenization & Word Cloud
+# ##Check Tokenized Words
+txt <- str_replace(TotalDrugsDataEdited$review,'/|', ' ')
+word_tokens <- unlist(tokenize_words(txt))
+
+
+# ##Bulding Corpus
+TotalDrugsDataEditedCorpus <- VCorpus(VectorSource(TotalDrugsDataEdited$review))
+
+
+remove_special_characters <- function(corpus) {
+  corpus_cleaned <- tm_map(corpus, content_transformer(function(x) gsub("[^a-zA-Z0-9 ]", "", x)))
+  return(corpus_cleaned)
+}
+
+# ##Cleaning Raw Data
+TotalDrugsDataEditedCorpus <- tm_map(TotalDrugsDataEditedCorpus, content_transformer(function(x) iconv(enc2utf8(x), sub = "byte")))
+TotalDrugsDataEditedCorpus <- remove_special_characters(TotalDrugsDataEditedCorpus)
+TotalDrugsDataEditedCorpus <- tm_map(TotalDrugsDataEditedCorpus, removeWords,stopwords())
+TotalDrugsDataEditedCorpus <- tm_map(TotalDrugsDataEditedCorpus, stripWhitespace)
+TotalDrugsDataEditedCorpus <- tm_map(TotalDrugsDataEditedCorpus, removePunctuation)
+TotalDrugsDataEditedCorpus <- tm_map(TotalDrugsDataEditedCorpus, content_transformer(tolower))
+
+
+##Lemitization
+TotalDrugsDataEditedCorpus<- tm_map(TotalDrugsDataEditedCorpus, content_transformer(lemmatize_strings))
+
+head(TotalDrugsDataEditedCorpus)
+
+
+# Crating Document Term Matrix Using Tf-IDF
+tdmtfidf <- DocumentTermMatrix(TotalDrugsDataEditedCorpus, control = list(weighting = weightTfIdf))
+
+# ##Creating Document Term Matrix Using Bag Of Words
+tdm<- TermDocumentMatrix(TotalDrugsDataEditedCorpus, control = list(wordlengths = c(1,Inf)))
+
+# Check Words Frequencey For Bag Of Words
+freq_terms<- findFreqTerms(tdm, lowfreq=20)
+term_freq<- rowSums(as.matrix(tdm))
+term_freq<- subset(term_freq, term_freq>=10)
+df<- data.frame(term = names(term_freq), freq = term_freq)
+df_plot<- df %>%
+  top_n(25)
+
+
+
+# Plot word frequency
+ggplot(df_plot, aes(x = reorder(term, +freq), y = freq, fill = freq)) + geom_bar(stat = "identity")+ scale_colour_gradientn(colors = terrain.colors(10))+ xlab("Terms")+ ylab("Count")+coord_flip()
+
+## Word Cloud
+wordcloud2(df, color = "random-dark", backgroundColor = "white")
+
+
+# Check Words Frequencey For TFIDF
+freq_terms_tfidf<- findFreqTerms(tdmtfidf, lowfreq=20)
+term_freq_idf<- rowSums(as.matrix(tdm))
+#term_freq_idf<- subset(term_freq_idf, term_freq_idf>=20)
+dfidf<- data.frame(term = names(term_freq_idf), freq = term_freq_idf)
+df_plot_idf<- dfidf %>%
+  top_n(25)
+
+wordcloud2(dfidf, color = "random-dark", backgroundColor = "white")
+
+# Find associations 
+findAssocs(tdm, terms = c("good","work","health","medication","positive","benifit","experience"), corlimit = 0.25)			
+
+# Find associations for words that occur at least 20 times
+#findAssocs(tdm, terms = findFreqTerms(tdm, lowfreq=20), corlimit = 0.25)
+
+##Get Sentiments
+s <- get_nrc_sentiment(iconv(TotalDrugsDataEdited$review))
+
+
+barplot(colSums(s),
+        las = 2,
+        col = rainbow(10),
+        ylab = 'Count',
+        main = 'Sentiment Scores Reviews')
+
+##Train/Test Split
+set.seed(400)
+
+split = sample.split(TotalDrugsDataEdited$sentimentlabel, SplitRatio = 0.75)
+training_set = subset(TotalDrugsDataEdited, split == TRUE)
+test_set = subset(TotalDrugsDataEdited, split == FALSE)
+
+
+# ##Multinomial Naive Bayes
+classifier = naiveBayes(x = training_set[-2],y = training_set$sentimentlabel)
+y_pred = predict(classifier, newdata = test_set[-2])
+
+confusionMatrix(y_pred,test_set$sentimentlabel)
+
+# ## Support Vector Machine
+svmclassifier = svm(formula = sentimentlabel~.,
+                 data = training_set,
+                 type = 'C-classification',
+                 kernel = 'linear')
+y_pred_svm = predict(svmclassifier, newdata = test_set[,-ncol(test_set)])
+
+confusionMatrix(y_pred_svm,test_set$sentimentlabel)
+
+# head(training_set)
+# ## Logistic Regression
+# logistic_model <- glm(sentimentlabel~ condition+rating,
+#                     data = training_set,
+#                     family = "binomial")
+# 
+# 
+# predict_reg <- predict(logistic_model,
+#                        test_set[-1], type = "response")
+
+
+```
