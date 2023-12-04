@@ -36,6 +36,7 @@ library(lubridate)
 library(scales)
 library(naivebayes)
 library(Matrix)
+library(Rfast) 
 ```
 
 ```{r}
@@ -171,9 +172,9 @@ choices = c('negative','neutral','positive')
 
 
 TotalDrugsDataEdited<-TotalDrugsDataEdited %>% mutate(sentimentlabel =
-                     case_when(rating <= 4 ~ "negative", 
-                               rating < 8 & rating>4 ~ "neutral",
-                               rating <= 10 & rating > 7 ~ "positive")
+                     case_when(rating <= 4 ~ 0, 
+                               rating < 8 & rating>4 ~ 2,
+                               rating <= 10 & rating > 7 ~ 1)
 )
 
 TotalDrugsDataEdited$sentimentlabel <- as.factor(TotalDrugsDataEdited$sentimentlabel )
@@ -212,7 +213,7 @@ TotalDrugsDataEditedCorpus <- tm_map(TotalDrugsDataEditedCorpus, content_transfo
 ##Lemitization
 TotalDrugsDataEditedCorpus<- tm_map(TotalDrugsDataEditedCorpus, content_transformer(lemmatize_strings))
 
-head(TotalDrugsDataEditedCorpus)
+
 
 
 # Crating Document Term Matrix Using Tf-IDF
@@ -252,7 +253,7 @@ wordcloud2(dfidf, color = "random-dark", backgroundColor = "white")
 findAssocs(tdm, terms = c("good","work","health","medication","positive","benifit","experience"), corlimit = 0.25)			
 
 # Find associations for words that occur at least 20 times
-#findAssocs(tdm, terms = findFreqTerms(tdm, lowfreq=20), corlimit = 0.25)
+findAssocs(tdm, terms = findFreqTerms(tdm, lowfreq=20), corlimit = 0.25)
 
 ##Get Sentiments
 s <- get_nrc_sentiment(iconv(TotalDrugsDataEdited$review))
@@ -265,37 +266,55 @@ barplot(colSums(s),
         main = 'Sentiment Scores Reviews')
 
 ##Train/Test Split
+head(TotalDrugsDataEdited)
 set.seed(400)
 
-split = sample.split(TotalDrugsDataEdited$sentimentlabel, SplitRatio = 0.75)
+
+split = sample.split(TotalDrugsDataEdited$sentimentlabel, SplitRatio = 0.8)
 training_set = subset(TotalDrugsDataEdited, split == TRUE)
 test_set = subset(TotalDrugsDataEdited, split == FALSE)
 
 
 # ##Multinomial Naive Bayes
-classifier = naiveBayes(x = training_set[-2],y = training_set$sentimentlabel)
-y_pred = predict(classifier, newdata = test_set[-2])
+classifier = naiveBayes(x = training_set[-4],y = training_set$sentimentlabel)
+y_pred = predict(classifier, newdata = test_set[-4])
 
 confusionMatrix(y_pred,test_set$sentimentlabel)
 
 # ## Support Vector Machine
-svmclassifier = svm(formula = sentimentlabel~.,
+svmclassifier <- svm(formula = sentimentlabel~.,
                  data = training_set,
                  type = 'C-classification',
                  kernel = 'linear')
-y_pred_svm = predict(svmclassifier, newdata = test_set[,-ncol(test_set)])
+y_pred_svm <- predict(svmclassifier, newdata = test_set[,-ncol(test_set)])
 
 confusionMatrix(y_pred_svm,test_set$sentimentlabel)
 
+
+TotalDrugsDataEdited2 <- TotalDrugsDataEdited
+dropcatcolumns <- c("review", "drugName", "condition") 
+TotalDrugsDataEdited2<-  TotalDrugsDataEdited2[,!(names(TotalDrugsDataEdited2) %in% dropcatcolumns)]
+
+split2 = sample.split(TotalDrugsDataEdited2$sentimentlabel, SplitRatio = 0.8)
+training_set1 = subset(TotalDrugsDataEdited2, split2 == TRUE)
+test_set1 = subset(TotalDrugsDataEdited2, split2 == FALSE)
+
 # head(training_set)
 # ## Logistic Regression
-# logistic_model <- glm(sentimentlabel~ condition+rating,
-#                     data = training_set,
-#                     family = "binomial")
+logistic_model <- glm(sentimentlabel~.,
+                    data = training_set1,
+                    family = "binomial")
+
+# #summary(logistic_model)
 # 
-# 
-# predict_reg <- predict(logistic_model,
-#                        test_set[-1], type = "response")
+predict_reg <- predict(logistic_model,
+                       test_set1, type = "response")
+
+table(test_set1$sentimentlabel, predict_reg)
+
+missing_classerr <- mean(predict_reg != test_set1$sentimentlabel)
+print(paste('Accuracy =', 1 - missing_classerr))
+
 
 
 ```
